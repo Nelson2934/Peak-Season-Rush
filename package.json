@@ -1,0 +1,9 @@
+{
+  "name": "peak-season-rush",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "firebase-admin": "^14.4.0"
+  }
+}
