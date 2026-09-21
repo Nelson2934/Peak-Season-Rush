@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Nobody can read or write the database directly from a browser.
+    // Only the Vercel server functions (using the Admin SDK) can, and they
+    // check every score by replaying the game first.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
