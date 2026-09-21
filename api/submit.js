@@ -20,29 +20,35 @@ export default async function handler(req, res) {
 
   try {
     const result = await db.runTransaction(async tx => {
-      const snap = await tx.get(sessionRef);
-      if (!snap.exists) throw new Error('Session not found');
-      const s = snap.data();
-      if (s.used) throw new Error('This game was already submitted');
-      tx.update(sessionRef, { used: true });
+      // 1. All reads first
+      const [sessionSnap, scoreSnap] = await Promise.all([tx.get(sessionRef), tx.get(scoreRef)]);
+      if (!sessionSnap.exists) return { error: 'Session not found' };
+      const s = sessionSnap.data();
+      if (s.used) return { error: 'This game was already submitted' };
 
+      // 2. Check the game (no database access)
       const r = verify(s.seed, moves);
-      if (!r) throw new Error('Replay did not check out');
-
-      // The game can't have lasted longer than the real time since it started
       const realSecs = (Date.now() - s.startedAt.toMillis()) / 1000;
-      if (r.ticks * TICK > realSecs + 5) throw new Error('Game ran faster than real time');
+      let error = null;
+      if (!r) error = 'Replay did not check out';
+      else if (r.ticks * TICK > realSecs + 5) error = 'Game ran faster than real time';
 
-      const cur = await tx.get(scoreRef);
-      const prevBest = cur.exists ? cur.data().score : 0;
+      // 3. Writes last. The session is used up even if the check failed.
+      tx.update(sessionRef, { used: true });
+      if (error) return { error };
+
+      const prevBest = scoreSnap.exists ? scoreSnap.data().score : 0;
       const isBest = r.score > prevBest;
       if (isBest && r.score > 0) {
         tx.set(scoreRef, { name, score: r.score, level: r.level, at: FieldValue.serverTimestamp() });
       }
       return { ...r, isBest, prevBest };
     });
+
+    if (result.error) return res.status(400).json(result);
     res.status(200).json(result);
   } catch (e) {
-    res.status(400).json({ error: e.message || 'Could not save score' });
+    console.error(e);
+    res.status(500).json({ error: 'Could not save score, please try again' });
   }
 }
