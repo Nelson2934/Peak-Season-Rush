@@ -17,7 +17,13 @@ export const KINDS = [
   { e: '☕', cocoa: true },
   { e: '❤️', life: true },
   { e: '💥', bad: true },
+  { e: '🏆', golden: true },   // double points for a while
+  { e: '🧹', sweep: true },    // clears the damaged stock in the air
+  { e: '🎅', santa: true },    // rare: big points and a life back
 ];
+export const FORK_W = 70;        // how wide the forklift blocks the aisle
+export const FORK_SPEED = 115;
+export const GOLDEN_SECS = 8;
 
 function rng(seed) {
   let a = seed >>> 0;
@@ -34,12 +40,23 @@ export function newGame(seed) {
   return {
     rand: rng(seed), x: W / 2, score: 0, lives: 3, caught: 0, missed: 0,
     time: 0, ticks: 0, level: 1, items: [], spawn: 1, combo: 0, best: 0,
-    slow: 0, over: false, nextId: 1,
+    slow: 0, golden: 0, wind: 0, windDir: 0, fork: null, forkIn: 14,
+    gustIn: 20, over: false, nextId: 1,
   };
 }
 
 function weights(s) {
-  return [50, 22, 6, 4, s.lives < 5 ? 2 : 0, 10 + s.level * 4];
+  return [
+    50,                                  // parcel
+    22,                                  // gift
+    6,                                   // priority
+    4,                                   // hot chocolate
+    s.lives < 5 ? 2 : 0,                 // extra life
+    10 + s.level * 4,                    // damaged stock
+    s.level >= 3 ? 2 : 0,                // golden pallet
+    s.level >= 2 ? 3 : 0,                // sweep
+    s.level >= 4 ? 1 : 0,                // santa
+  ];
 }
 function pickKind(s) {
   const w = weights(s);
@@ -69,7 +86,48 @@ export function step(s, wantX) {
   const lv = 1 + Math.floor(s.time / LEVEL_SECS);
   if (lv > s.level) { s.level = lv; ev.push({ type: 'level', level: lv }); }
 
+  s.golden = Math.max(0, s.golden - dt);
+
+  // Draughty shutter: every so often the wind pushes everything sideways
+  if (s.level >= 6) {
+    if (s.wind > 0) { s.wind -= dt; if (s.wind <= 0) { s.wind = 0; s.windDir = 0; } }
+    else {
+      s.gustIn -= dt;
+      if (s.gustIn <= 0) {
+        s.gustIn = 15 + s.rand() * 12;
+        s.wind = 4 + s.rand() * 2;
+        s.windDir = s.rand() < 0.5 ? -1 : 1;
+        ev.push({ type: 'gust', dir: s.windDir });
+      }
+    }
+  }
+
+  // Forklift crossing the aisle
+  if (s.level >= 4) {
+    if (s.fork) {
+      const f = s.fork;
+      if (f.warn > 0) { f.warn -= dt; }
+      else {
+        f.x += FORK_SPEED * f.dir * dt;
+        if (f.x < -80 || f.x > W + 80) s.fork = null;
+      }
+    } else {
+      s.forkIn -= dt;
+      if (s.forkIn <= 0) {
+        s.forkIn = 11 + s.rand() * 8;
+        const dir = s.rand() < 0.5 ? 1 : -1;
+        s.fork = { dir, x: dir > 0 ? -70 : W + 70, warn: 1.4 };
+        ev.push({ type: 'forkwarn', dir });
+      }
+    }
+  }
+
   s.x = clampX(s.x, wantX);
+
+  if (s.fork && s.fork.warn <= 0 && Math.abs(s.fork.x - s.x) < FORK_W) {
+    s.lives--; s.combo = 0; s.fork = null;
+    ev.push({ type: 'forkhit', x: s.x });
+  }
 
   s.spawn -= dt;
   if (s.spawn <= 0) {
@@ -88,7 +146,7 @@ export function step(s, wantX) {
   }
 
   for (const it of s.items) {
-    it.y += it.v * dt; it.x += it.dx * dt;
+    it.y += it.v * dt; it.x += (it.dx + s.windDir * 70) * dt;
     if (it.x < 20 || it.x > W - 20) it.dx = -it.dx;
     const k = KINDS[it.kind];
     if (!it.done && it.y > TRUCK_Y - 10 && it.y < TRUCK_Y + 25 && Math.abs(it.x - s.x) < 50) {
@@ -96,9 +154,21 @@ export function step(s, wantX) {
       if (k.bad) { s.lives--; s.combo = 0; ev.push({ type: 'bad', x: it.x, y: it.y }); }
       else if (k.cocoa) { s.slow = 5; ev.push({ type: 'cocoa', x: it.x, y: it.y }); }
       else if (k.life) { s.lives = Math.min(5, s.lives + 1); ev.push({ type: 'life', x: it.x, y: it.y }); }
+      else if (k.golden) { s.golden = GOLDEN_SECS; ev.push({ type: 'golden', x: it.x, y: it.y }); }
+      else if (k.sweep) {
+        let cleared = 0;
+        for (const o of s.items) if (!o.done && KINDS[o.kind].bad) { o.done = true; cleared++; }
+        s.score += cleared * 5;
+        ev.push({ type: 'sweep', x: it.x, y: it.y, cleared });
+      }
+      else if (k.santa) {
+        s.lives = Math.min(5, s.lives + 1);
+        s.score += 100 * (s.golden > 0 ? 2 : 1); s.caught++;
+        ev.push({ type: 'santa', x: it.x, y: it.y });
+      }
       else {
         s.combo++; s.best = Math.max(s.best, s.combo);
-        const m = 1 + Math.floor(s.combo / 10), g = k.pts * m;
+        const m = (1 + Math.floor(s.combo / 10)) * (s.golden > 0 ? 2 : 1), g = k.pts * m;
         s.score += g; s.caught++;
         ev.push({ type: 'catch', x: it.x, y: it.y, pts: g, mult: m });
       }
