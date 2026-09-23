@@ -57,14 +57,18 @@ button:focus-visible{outline:3px solid var(--yellow);outline-offset:3px}
 
   <div class="overlay" id="start">
     <h1 class="sign">Peak Season<br>Rush</h1>
-    <p class="sub">An endless Christmas shift at GXO. It gets busier the longer you last.</p>
+    <p class="sub">An endless Christmas shift at GXO. New hazards arrive as the levels climb.</p>
     <div class="legend">
       <span>📦</span><span>Parcel, 10 points</span>
       <span>🎁</span><span>Gift order, 25 points</span>
       <span>⭐</span><span>Priority next-day, 50 points</span>
       <span>☕</span><span>Hot chocolate, slows everything for 5s</span>
       <span>❤️</span><span>Extra life</span>
+      <span>🏆</span><span>Golden pallet, double points for 8s</span>
+      <span>🧹</span><span>Sweep, clears the damaged stock in the air</span>
+      <span>🎅</span><span>Santa's own order, 100 points and a life</span>
       <span>💥</span><span>Damaged stock, costs a life</span>
+      <span>🚜</span><span>Forklift crossing, get out of its way</span>
       <span>🚫</span><span>Dropping a parcel also costs a life</span>
     </div>
     <label for="name">Your name for the leaderboard</label>
@@ -86,7 +90,7 @@ button:focus-visible{outline:3px solid var(--yellow);outline-offset:3px}
 </div>
 
 <script type="module">
-import { W, H, TICK, TRUCK_Y, KINDS, newGame, step, encodeMoves } from './game-core.js';
+import { W, H, TICK, TRUCK_Y, KINDS, FORK_W, newGame, step, encodeMoves } from './game-core.js';
 
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 function fit(){const d=window.devicePixelRatio||1;cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0)}
@@ -96,7 +100,7 @@ const LEVELS=['Early shift','Pre-Christmas build','Black Friday backlog','Cyber 
 function levelName(l){return LEVELS[Math.min(l-1,LEVELS.length-1)]+(l>LEVELS.length?' '+(l-LEVELS.length+1):'')}
 
 let G=null,session=null,moves=[],running=false,acc=0,last=0;
-let fx={pops:[],shake:0,banner:0};
+let fx={pops:[],shake:0,banner:0,flash:0,warn:0,gust:0};
 let keys={},pointerX=null;
 const snow=Array.from({length:60},()=>({x:Math.random()*W,y:Math.random()*H,r:Math.random()*2+0.6,s:Math.random()*20+15}));
 const lights=['#d7263d','#ffc619','#2fbf71','#4aa3ff'];
@@ -109,6 +113,12 @@ function handle(ev){
     else if(e.type==='drop'){pop(e.x,e.y,'Dropped!','#ff5a6e');fx.shake=.2}
     else if(e.type==='cocoa')pop(e.x,e.y,'Break time!','#ffd9a0');
     else if(e.type==='life')pop(e.x,e.y,'+1 life','#ff9fb0');
+    else if(e.type==='golden'){pop(e.x,e.y,'Double points!','#ffd700');fx.flash=.4}
+    else if(e.type==='sweep')pop(e.x,e.y,e.cleared?'Cleared '+e.cleared+' +'+e.cleared*5:'All tidy','#8fd3ff');
+    else if(e.type==='santa')pop(e.x,e.y,'Santa order +100','#ff9fb0');
+    else if(e.type==='forkhit'){pop(e.x,TRUCK_Y-40,'Forklift! -1 life','#ff5a6e');fx.shake=.45}
+    else if(e.type==='forkwarn')fx.warn=1.4;
+    else if(e.type==='gust')fx.gust=1.6;
     else if(e.type==='level')fx.banner=2.5;
     else if(e.type==='over')end();
   }
@@ -142,7 +152,7 @@ function drawBG(t){
   ctx.fillStyle='rgba(244,247,251,.8)';
   for(const s of snow){ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,7);ctx.fill()}
 }
-function tickSnow(dt){for(const s of snow){s.y+=s.s*dt;s.x+=Math.sin(s.y/30)*.3;if(s.y>H){s.y=-5;s.x=Math.random()*W}}}
+function tickSnow(dt){const w=G&&G.wind>0?G.windDir*90:0;for(const s of snow){s.y+=s.s*dt;s.x+=Math.sin(s.y/30)*.3+w*dt;if(s.x<-5)s.x=W+5;if(s.x>W+5)s.x=-5;if(s.y>H){s.y=-5;s.x=Math.random()*W}}}
 
 function drawTruck(x){
   ctx.save();ctx.translate(x,TRUCK_Y);
@@ -156,13 +166,36 @@ function drawTruck(x){
   ctx.restore();
 }
 
+function drawFork(f){
+  ctx.save();ctx.translate(f.x,TRUCK_Y+6);
+  if(f.dir<0)ctx.scale(-1,1);
+  ctx.fillStyle='#10151b';ctx.fillRect(-46,-4,92,8);
+  ctx.fillStyle='#e8751a';ctx.fillRect(-40,-46,58,46);
+  ctx.fillStyle='#10151b';ctx.fillRect(-34,-40,24,20);
+  ctx.fillStyle='#3a4552';ctx.fillRect(20,-72,7,72);ctx.fillRect(34,-72,7,72);
+  ctx.fillStyle='#ffc619';ctx.fillRect(27,-20,26,5);ctx.fillRect(48,-20,5,20);
+  ctx.fillStyle='#10151b';ctx.beginPath();ctx.arc(-28,4,10,0,7);ctx.arc(14,4,8,0,7);ctx.fill();
+  ctx.fillStyle='#ffc619';ctx.beginPath();ctx.arc(-6,-54,5,0,7);ctx.fill();
+  ctx.restore();
+}
+
 function drawHUD(){
   ctx.fillStyle='rgba(16,21,27,.85)';ctx.fillRect(0,0,W,46);
   ctx.font='20px Bungee, Impact, sans-serif';ctx.textBaseline='middle';
   ctx.fillStyle='#ffc619';ctx.textAlign='left';ctx.fillText(G.score,14,24);
   ctx.textAlign='center';ctx.fillStyle='#f4f7fb';ctx.font='16px Bungee, Impact, sans-serif';ctx.fillText('Level '+G.level,W/2,24);
   ctx.textAlign='right';ctx.font='16px sans-serif';ctx.fillText('❤️'.repeat(Math.max(0,G.lives)),W-10,24);
+  if(fx.flash>0){ctx.fillStyle='rgba(255,215,0,'+(fx.flash*.5)+')';ctx.fillRect(0,0,W,H)}
+  if(G.fork&&G.fork.warn>0&&Math.floor(fx.warn*8)%2===0){
+    const x=G.fork.dir>0?34:W-34;
+    ctx.save();ctx.translate(x,TRUCK_Y-60);ctx.fillStyle='#ffc619';ctx.beginPath();
+    ctx.moveTo(0,-20);ctx.lineTo(20,16);ctx.lineTo(-20,16);ctx.closePath();ctx.fill();
+    ctx.fillStyle='#10151b';ctx.font='700 22px Rubik, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('!',0,6);ctx.restore();
+    ctx.textBaseline='middle';
+  }
   ctx.font='14px Rubik, sans-serif';
+  if(G.golden>0){ctx.fillStyle='#ffd700';ctx.textAlign='center';ctx.fillText('🏆 Double points '+G.golden.toFixed(1)+'s',W/2,62)}
+  if(G.wind>0){ctx.fillStyle='#8fd3ff';ctx.textAlign='center';ctx.fillText((G.windDir<0?'⬅':'➡')+' Shutter open, mind the draught',W/2,84)}
   if(G.combo>=5){ctx.fillStyle='#2fbf71';ctx.textAlign='left';ctx.fillText('Streak '+G.combo,14,60)}
   if(G.slow>0){ctx.fillStyle='rgba(255,217,160,.12)';ctx.fillRect(0,46,W,H-46);ctx.fillStyle='#ffd9a0';ctx.textAlign='right';ctx.fillText('☕ '+G.slow.toFixed(1)+'s',W-14,60)}
   if(fx.banner>0){
@@ -182,6 +215,8 @@ function draw(t){
   if(G){
     ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='34px sans-serif';
     for(const it of G.items){ctx.save();ctx.translate(it.x,it.y);ctx.rotate(Math.sin(t*2+it.id)*.25);ctx.fillText(KINDS[it.kind].e,0,0);ctx.restore()}
+    if(G.fork&&G.fork.warn<=0)drawFork(G.fork);
+    if(G.golden>0){ctx.save();ctx.globalAlpha=.25+Math.sin(t*8)*.12;ctx.fillStyle='#ffd700';ctx.beginPath();ctx.ellipse(G.x,TRUCK_Y+10,74,40,0,0,7);ctx.fill();ctx.restore()}
     drawTruck(G.x);
     ctx.font='bold 16px Rubik, sans-serif';
     for(const p of fx.pops){ctx.globalAlpha=Math.max(0,p.a);ctx.fillStyle=p.col;ctx.fillText(p.txt,p.x,p.y)}
@@ -198,6 +233,7 @@ function loop(ts){
   for(const p of fx.pops){p.y-=40*dt;p.a-=dt*1.2}
   fx.pops=fx.pops.filter(p=>p.a>0);
   fx.shake=Math.max(0,fx.shake-dt);fx.banner=Math.max(0,fx.banner-dt);
+  fx.flash=Math.max(0,fx.flash-dt);fx.warn=Math.max(0,fx.warn-dt);fx.gust=Math.max(0,fx.gust-dt);
   draw(ts/1000);
   requestAnimationFrame(loop);
 }
@@ -273,7 +309,7 @@ async function start(){
     if(r.ok)session=await r.json();
   }catch(e){}
   const seed=session?session.seed:Math.floor(Math.random()*2**31);
-  G=newGame(seed);moves=[];acc=0;keys={};pointerX=null;fx={pops:[],shake:0,banner:2.5};
+  G=newGame(seed);moves=[];acc=0;keys={};pointerX=null;fx={pops:[],shake:0,banner:2.5,flash:0,warn:0,gust:0};
   running=true;starting=false;
   document.getElementById('start').hidden=true;document.getElementById('end').hidden=true;
 }
